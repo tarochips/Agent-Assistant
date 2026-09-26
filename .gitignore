@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+tmp/
+
+# V1 stores user content and generated indexes locally.
+data/documents/
+data/sessions/
+data/docstore.json
+data/vectorizer.pkl
+
+.idea/
