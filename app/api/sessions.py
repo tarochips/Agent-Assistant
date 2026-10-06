@@ -11,32 +11,32 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 @router.get("", response_model=list[SessionSummary])
-def list_sessions(
+async def list_sessions(
     service: Annotated[SessionService, Depends(get_session_service)],
 ) -> list[dict]:
-    return service.list()
+    return await service.list()
 
 
 @router.post("", response_model=SessionDetail, status_code=status.HTTP_201_CREATED)
-def create_session(
+async def create_session(
     service: Annotated[SessionService, Depends(get_session_service)],
     request: Annotated[CreateSessionRequest | None, Body()] = None,
 ) -> dict:
-    return service.create(request.title if request else None)
+    return await service.create(request.title if request else None)
 
 
 @router.get("/{session_id}", response_model=SessionDetail)
-def get_session(
+async def get_session(
     session_id: str,
     service: Annotated[SessionService, Depends(get_session_service)],
 ) -> dict:
-    return service.get(session_id)
+    return await service.get(session_id)
 
 
 @router.delete("/{session_id}", response_model=DeleteResponse)
-def delete_session(
+async def delete_session(
     session_id: str,
     service: Annotated[SessionService, Depends(get_session_service)],
 ) -> DeleteResponse:
-    service.delete(session_id)
+    await service.delete(session_id)
     return DeleteResponse(deleted=True)

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-ready-rag"
-version = "1.0.0"
-description = "A traceable and testable RAG foundation for future agent workflows."
+version = "2.0.0"
+description = "A PostgreSQL-backed RAG knowledge base with local vector retrieval."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
@@ -15,6 +15,10 @@ dependencies = [
     "numpy>=1.26",
     "pydantic-settings>=2.6",
     "python-multipart>=0.0.9",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "pgvector>=0.3",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

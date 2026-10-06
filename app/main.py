@@ -1,3 +1,6 @@
+import sys
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -8,14 +11,23 @@ from app.core.exceptions import AppError
 from app.core.logging import configure_logging, request_logging_middleware
 
 
+@asynccontextmanager
+async def lifespan(_application: FastAPI):
+    yield
+    database_module = sys.modules.get("app.core.database")
+    if database_module is not None:
+        await database_module.dispose_engine()
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging()
 
     application = FastAPI(
         title=settings.app_name,
-        version="1.0.0",
-        description="A traceable and testable RAG foundation for future agent workflows.",
+        version="2.0.0",
+        description="A PostgreSQL-backed RAG knowledge base with local vector retrieval.",
+        lifespan=lifespan,
     )
 
     application.middleware("http")(request_logging_middleware)

@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2048
 
+    database_url: str = "postgresql+asyncpg://rag:rag_dev_password@localhost:5432/agent_rag"
+
     chunk_size: int = Field(default=400, gt=0)
     chunk_overlap: int = Field(default=100, ge=0)
     retrieval_top_k: int = Field(default=4, gt=0, le=20)

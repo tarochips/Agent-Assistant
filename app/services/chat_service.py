@@ -1,13 +1,13 @@
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from app.core.config import Settings
 from app.llm.client import LLMClient
-from app.repositories.sessions import JsonSessionRepository
 from app.retrieval.models import SearchResult
-from app.retrieval.tfidf import TfidfRetriever
 from app.schemas.chat import ChatRequest
 from app.schemas.events import CompletedEvent, ErrorEvent, RetrievalEvent, TokenEvent
+from app.services._async_utils import resolve
 from app.streaming.sse import encode_sse
 
 logger = logging.getLogger("rag_app.chat")
@@ -16,8 +16,8 @@ logger = logging.getLogger("rag_app.chat")
 class ChatService:
     def __init__(
         self,
-        session_repository: JsonSessionRepository,
-        retriever: TfidfRetriever,
+        session_repository: Any,
+        retriever: Any,
         llm_client: LLMClient,
         settings: Settings,
     ) -> None:
@@ -27,15 +27,30 @@ class ChatService:
         self._settings = settings
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[str]:
-        session = self._resolve_session(request.session_id)
-        session_id = str(session["id"])
-        history = session.get("messages", [])[-self._settings.history_max_messages :]
+        try:
+            session = await self._resolve_session(request.session_id)
+            results = await resolve(
+                self._retriever.search(
+                    request.message,
+                    top_k=self._settings.retrieval_top_k,
+                    min_score=self._settings.retrieval_min_score,
+                )
+            )
+        except Exception:
+            logger.exception("retrieval_failed")
+            yield encode_sse(
+                "error",
+                ErrorEvent(
+                    code="RETRIEVAL_ERROR",
+                    message="知识库检索失败，请检查数据库和检索配置",
+                ),
+            )
+            return
 
-        results = self._retriever.search(
-            request.message,
-            top_k=self._settings.retrieval_top_k,
-            min_score=self._settings.retrieval_min_score,
-        )
+        session_id = str(session["id"])
+        history = session.get("messages", [])
+        max_history = self._settings.history_max_messages
+        history = history[-max_history:] if max_history else []
         citations = [result.to_citation() for result in results]
         yield encode_sse(
             "retrieval",
@@ -63,23 +78,36 @@ class ChatService:
 
         full_answer = "".join(answer_parts)
         citation_dicts = [citation.model_dump(mode="json") for citation in citations]
-        self._sessions.append_exchange(
-            session_id,
-            request.message,
-            full_answer,
-            citation_dicts,
-        )
+        try:
+            await resolve(
+                self._sessions.append_exchange(
+                    session_id,
+                    request.message,
+                    full_answer,
+                    citation_dicts,
+                )
+            )
+        except Exception:
+            logger.exception("session_persistence_failed session_id=%s", session_id)
+            yield encode_sse(
+                "error",
+                ErrorEvent(
+                    code="SESSION_PERSISTENCE_ERROR",
+                    message="回答已生成，但保存会话失败，请检查数据库连接",
+                ),
+            )
+            return
         yield encode_sse(
             "completed",
             CompletedEvent(session_id=session_id, citations=citations),
         )
 
-    def _resolve_session(self, session_id: str | None) -> dict:
+    async def _resolve_session(self, session_id: str | None) -> dict:
         if session_id:
-            session = self._sessions.get(session_id)
+            session = await resolve(self._sessions.get(session_id))
             if session is not None:
                 return session
-        return self._sessions.create()
+        return await resolve(self._sessions.create())
 
     @staticmethod
     def _build_messages(

@@ -10,10 +10,10 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 @router.get("", response_model=list[DocumentSummary])
-def list_documents(
+async def list_documents(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> list[dict]:
-    return service.list()
+    return await service.list()
 
 
 @router.post(
@@ -26,13 +26,13 @@ async def upload_document(
     file: Annotated[UploadFile, File()],
 ) -> dict:
     content = await file.read()
-    return service.upload(file.filename or "", content)
+    return await service.upload(file.filename or "", content)
 
 
 @router.delete("/{doc_id}", response_model=DeleteResponse)
-def delete_document(
+async def delete_document(
     doc_id: str,
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> DeleteResponse:
-    service.delete(doc_id)
+    await service.delete(doc_id)
     return DeleteResponse(deleted=True)
