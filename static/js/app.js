@@ -82,6 +82,8 @@
         btnSend.disabled = false;
         renderSessions();
         scrollBottom();
+        const pending = await api("GET", `/chat/${encodeURIComponent(id)}/pending`);
+        if (pending.pending) await resumePendingApproval(id, pending.pending);
     }
 
     async function deleteSession(id) {
@@ -217,6 +219,94 @@
         return { eventName, payload: JSON.parse(raw) };
     }
 
+    async function consumeChatStream(response, botContent, streamState) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+            const blocks = buffer.split("\n\n");
+            buffer = blocks.pop();
+
+            for (const block of blocks) {
+                if (!block.trim()) continue;
+                const parsed = parseSseBlock(block);
+                if (!parsed) continue;
+                const { eventName, payload } = parsed;
+                const type = payload.type || eventName;
+
+                if (type === "retrieval") {
+                    streamState.sources = payload.sources || [];
+                    if (payload.session_id) state.activeSessionId = payload.session_id;
+                } else if (type === "token") {
+                    if (!streamState.started) {
+                        botContent.textContent = "";
+                        streamState.started = true;
+                    }
+                    botContent.textContent += payload.delta;
+                    scrollBottom();
+                } else if (type === "completed") {
+                    streamState.completed = true;
+                    streamState.sources = payload.citations || streamState.sources;
+                    renderSources(botContent, streamState.sources);
+                } else if (type === "approval_required") {
+                    const approved = window.confirm(
+                        `${payload.message}\n\n确认后才会执行此操作。点击“取消”将拒绝操作。`,
+                    );
+                    const resumed = await fetch(
+                        `${API}/chat/${encodeURIComponent(payload.session_id)}/resume`,
+                        {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ approved }),
+                        },
+                    );
+                    if (!resumed.ok) {
+                        const error = await resumed.json().catch(() => null);
+                        throw new Error(errorMessage(error, "恢复 Agent 执行失败"));
+                    }
+                    await consumeChatStream(resumed, botContent, streamState);
+                } else if (type === "error") {
+                    botContent.textContent = `错误：${payload.message}`;
+                    streamState.started = true;
+                }
+            }
+        }
+    }
+
+    async function resumePendingApproval(sessionId, pending) {
+        const approved = window.confirm(
+            `${pending.message}\n\n确认后才会执行此操作。点击“取消”将拒绝操作。`,
+        );
+        const botContent = addMessage("assistant", "正在恢复 Agent 执行…", "stream");
+        const streamState = { started: false, completed: false, sources: [] };
+        btnSend.disabled = true;
+        try {
+            const response = await fetch(
+                `${API}/chat/${encodeURIComponent(sessionId)}/resume`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ approved }),
+                },
+            );
+            if (!response.ok) {
+                const error = await response.json().catch(() => null);
+                throw new Error(errorMessage(error, "恢复 Agent 执行失败"));
+            }
+            await consumeChatStream(response, botContent, streamState);
+        } catch (error) {
+            botContent.textContent = `恢复失败：${error.message}`;
+        } finally {
+            botContent.removeAttribute("id");
+            btnSend.disabled = false;
+            await loadSessions();
+        }
+    }
+
     async function sendMessage() {
         const query = userInput.value.trim();
         if (!query) return;
@@ -236,9 +326,7 @@
 
         const controller = new AbortController();
         state.streamingAbort = controller;
-        let started = false;
-        let completed = false;
-        let sources = [];
+        const streamState = { started: false, completed: false, sources: [] };
 
         try {
             const response = await fetch(`${API}/chat/stream`, {
@@ -255,47 +343,14 @@
                 throw new Error(errorMessage(payload));
             }
 
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = "";
+            await consumeChatStream(response, botContent, streamState);
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-                const blocks = buffer.split("\n\n");
-                buffer = blocks.pop();
-
-                for (const block of blocks) {
-                    if (!block.trim()) continue;
-                    const parsed = parseSseBlock(block);
-                    if (!parsed) continue;
-                    const { eventName, payload } = parsed;
-                    const type = payload.type || eventName;
-
-                    if (type === "retrieval") {
-                        sources = payload.sources || [];
-                        if (payload.session_id) state.activeSessionId = payload.session_id;
-                    } else if (type === "token") {
-                        if (!started) {
-                            botContent.textContent = "";
-                            started = true;
-                        }
-                        botContent.textContent += payload.delta;
-                        scrollBottom();
-                    } else if (type === "completed") {
-                        completed = true;
-                        sources = payload.citations || sources;
-                        renderSources(botContent, sources);
-                    } else if (type === "error") {
-                        botContent.textContent = `错误：${payload.message}`;
-                        started = true;
-                    }
-                }
+            if (!streamState.started && streamState.completed) {
+                botContent.textContent = "模型未返回内容";
             }
-
-            if (!started && completed) botContent.textContent = "模型未返回内容";
-            if (!started && !completed) botContent.textContent = "回答已终止";
+            if (!streamState.started && !streamState.completed) {
+                botContent.textContent = "回答已终止";
+            }
         } catch (error) {
             botContent.textContent = error.name === "AbortError"
                 ? "回答已终止"

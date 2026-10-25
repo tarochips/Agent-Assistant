@@ -146,9 +146,7 @@ class TfidfRetriever:
             self._vectorizer = vectorizer
             return vectorizer
 
-    def _load_or_rebuild_vectorizer(
-        self, chunks: list[dict[str, object]]
-    ) -> TfidfVectorizer:
+    def _load_or_rebuild_vectorizer(self, chunks: list[dict[str, object]]) -> TfidfVectorizer:
         if self._vectorizer is not None:
             return self._vectorizer
         if self._vectorizer_path.exists():
@@ -156,7 +154,8 @@ class TfidfRetriever:
                 with self._vectorizer_path.open("rb") as stream:
                     vectorizer = pickle.load(stream)
                 expected_size = len(vectorizer.get_feature_names_out())
-                actual_size = len(chunks[0].get("embedding", []))
+                embedding = chunks[0].get("embedding", [])
+                actual_size = len(embedding) if isinstance(embedding, list) else 0
                 if expected_size == actual_size:
                     self._vectorizer = vectorizer
                     return vectorizer

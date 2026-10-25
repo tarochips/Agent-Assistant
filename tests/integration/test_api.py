@@ -1,3 +1,8 @@
+import json
+
+from app.llm.client import LLMToolCall
+
+
 def test_health_endpoints(client) -> None:
     response = client.get("/api/health/live")
     assert response.status_code == 200
@@ -59,3 +64,44 @@ def test_unsupported_document_is_rejected(client) -> None:
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_DOCUMENT"
+
+
+def test_delete_tool_waits_for_approval_and_resumes(client, service_bundle) -> None:
+    upload = client.post(
+        "/api/documents/upload",
+        files={"file": ("remove-me.md", "temporary knowledge", "text/markdown")},
+    )
+    document_id = upload.json()["doc_id"]
+    session = client.post("/api/sessions").json()
+    service_bundle["fake_llm"].replies = [
+        (
+            "",
+            [
+                LLMToolCall(
+                    "call-delete", "delete_document", json.dumps({"document_id": document_id})
+                )
+            ],
+        ),
+        ("文档已删除。", []),
+    ]
+
+    paused = client.post(
+        "/api/chat/stream",
+        json={"message": f"删除文档 {document_id}", "session_id": session["id"]},
+    )
+
+    assert "event: approval_required" in paused.text
+    pending = client.get(f"/api/chat/{session['id']}/pending").json()["pending"]
+    assert pending["document_id"] == document_id
+    assert len(client.get("/api/documents").json()) == 1
+
+    resumed = client.post(
+        f"/api/chat/{session['id']}/resume",
+        json={"approved": True},
+    )
+
+    assert "event: completed" in resumed.text
+    assert client.get(f"/api/chat/{session['id']}/pending").json()["pending"] is None
+    assert client.get("/api/documents").json() == []
+    saved = client.get(f"/api/sessions/{session['id']}").json()
+    assert saved["messages"][-1]["content"] == "文档已删除。"

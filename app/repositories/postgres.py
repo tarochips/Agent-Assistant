@@ -3,7 +3,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import ChunkRecord, DocumentRecord, MessageRecord, SessionRecord
@@ -54,6 +54,7 @@ class PostgresDocumentRepository:
         chunk_texts: list[str],
         embeddings: list[list[float]],
         *,
+        embedding_model: str,
         doc_id: str | None = None,
         uploaded_at: str | datetime | None = None,
     ) -> str:
@@ -76,6 +77,7 @@ class PostgresDocumentRepository:
                 chunk_index=index,
                 text=chunk_text,
                 embedding=vector,
+                embedding_model=embedding_model,
             )
             for index, (chunk_text, vector) in enumerate(zip(chunk_texts, embeddings, strict=True))
         ]
@@ -105,6 +107,64 @@ class PostgresDocumentRepository:
         async with self._session_factory() as session:
             result = await session.execute(select(ChunkRecord.id).limit(1))
             return result.scalar_one_or_none() is not None
+
+    async def list_chunks(self) -> list[SearchResult]:
+        statement = (
+            select(ChunkRecord, DocumentRecord.filename)
+            .join(DocumentRecord, DocumentRecord.id == ChunkRecord.document_id)
+            .order_by(ChunkRecord.document_id, ChunkRecord.chunk_index)
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            SearchResult(
+                chunk_id=f"{chunk.document_id}:{chunk.chunk_index}",
+                document_id=chunk.document_id,
+                filename=filename,
+                chunk_index=chunk.chunk_index,
+                text=chunk.text,
+                score=0.0,
+            )
+            for chunk, filename in rows
+        ]
+
+    async def has_stale_embeddings(self, embedding_model: str) -> bool:
+        statement = (
+            select(ChunkRecord.id).where(ChunkRecord.embedding_model != embedding_model).limit(1)
+        )
+        async with self._session_factory() as session:
+            result = await session.execute(statement)
+            return result.scalar_one_or_none() is not None
+
+    async def update_embeddings(
+        self,
+        embeddings: dict[str, list[float]],
+        *,
+        embedding_model: str,
+    ) -> None:
+        if not embeddings:
+            return
+        async with self._session_factory() as session, session.begin():
+            for chunk_id, vector in embeddings.items():
+                try:
+                    document_id, raw_index = chunk_id.rsplit(":", maxsplit=1)
+                    chunk_index = int(raw_index)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(f"invalid chunk id: {chunk_id}") from exc
+                if not _SAFE_ID.fullmatch(document_id) or chunk_index < 0:
+                    raise ValueError(f"invalid chunk id: {chunk_id}")
+                statement = (
+                    update(ChunkRecord)
+                    .where(
+                        ChunkRecord.document_id == document_id,
+                        ChunkRecord.chunk_index == chunk_index,
+                    )
+                    .values(embedding=vector, embedding_model=embedding_model)
+                    .returning(ChunkRecord.id)
+                )
+                result = await session.execute(statement)
+                if result.scalar_one_or_none() is None:
+                    raise ValueError(f"chunk not found: {chunk_id}")
 
     async def search(
         self,

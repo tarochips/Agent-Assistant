@@ -31,9 +31,7 @@ class DocumentService:
         if not raw_content:
             raise InvalidDocumentError("document is empty")
         if len(raw_content) > self._settings.max_upload_bytes:
-            raise InvalidDocumentError(
-                f"document exceeds {self._settings.max_upload_bytes} bytes"
-            )
+            raise InvalidDocumentError(f"document exceeds {self._settings.max_upload_bytes} bytes")
 
         try:
             content = raw_content.decode("utf-8-sig")
@@ -42,9 +40,7 @@ class DocumentService:
         if not content.strip():
             raise InvalidDocumentError("document contains no text")
 
-        doc_id, chunk_count = await resolve(
-            self._retriever.index_document(safe_filename, content)
-        )
+        doc_id, chunk_count = await resolve(self._retriever.index_document(safe_filename, content))
         return {
             "doc_id": doc_id,
             "filename": safe_filename,

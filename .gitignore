@@ -12,5 +12,6 @@ data/documents/
 data/sessions/
 data/docstore.json
 data/vectorizer.pkl
+data/model_cache/
 
 .idea/

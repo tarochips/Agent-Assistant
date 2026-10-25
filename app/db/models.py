@@ -33,6 +33,12 @@ class ChunkRecord(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(
+        String(256),
+        default="legacy-char-hash-384-v1",
+        server_default="legacy-char-hash-384-v1",
+        nullable=False,
+    )
 
 
 class SessionRecord(Base):

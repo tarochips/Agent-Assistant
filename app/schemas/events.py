@@ -29,6 +29,14 @@ class CompletedEvent(BaseModel):
     citations: list[Citation]
 
 
+class ApprovalRequiredEvent(BaseModel):
+    type: Literal["approval_required"] = "approval_required"
+    session_id: str
+    action: str
+    document_id: str
+    message: str
+
+
 class ErrorEvent(BaseModel):
     type: Literal["error"] = "error"
     code: str

@@ -30,7 +30,12 @@ async def ready(settings: Annotated[Settings, Depends(get_settings)]) -> Respons
             "status": "ready" if is_ready else "not_ready",
             "dependencies": {
                 "storage": database_status,
-                "vectorizer": "local",
+                "embedding_model": settings.embedding_model,
+                "reranker": (
+                    settings.retrieval_reranker_model
+                    if settings.retrieval_reranker_enabled
+                    else "disabled"
+                ),
                 "llm": "configured" if settings.deepseek_api_key else "missing_api_key",
             },
         },

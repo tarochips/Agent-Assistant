@@ -1,96 +1,118 @@
-# Agent-ready RAG V2
+# Agent-ready RAG V4
 
-这是一个可追溯、可测试、可扩展的 RAG 知识库。V2 将文档、分块和会话保存到 PostgreSQL，并用 pgvector 执行向量相似度检索。文本向量由本地字符 n-gram 哈希生成，不会把新上传的文档发送到额外的 Embedding 服务。
+这是一个基于 FastAPI、PostgreSQL 和 pgvector 的中文/英文知识库问答项目。V3 提供混合检索与重排，V4 使用 LangGraph 编排有状态 Agent，支持受控工具调用、工具循环、PostgreSQL Checkpoint 和人工确认后恢复执行。
 
-## 版本范围
+## 六阶段路线
 
-- **V1**：FastAPI、UTF-8 `.txt`/`.md` 上传、TF-IDF 检索、JSON 持久化、来源引用、DeepSeek 流式回答。
-- **V2**：PostgreSQL 持久化、pgvector cosine 检索、本地固定维度文本向量、Alembic 迁移、V1 JSON 导入工具。
+| 版本 | 目标 |
+|---|---|
+| V1 | 模块化 FastAPI、流式 SSE、基础 RAG |
+| V2 | PostgreSQL、pgvector、文档和会话持久化 |
+| V3 | 语义 Embedding、BM25、RRF、重排和检索评估 |
+| V4（当前） | LangGraph 单 Agent、受控工具调用、分支循环、Checkpoint 和中断恢复 |
+| V5 | 有证据引用的并行研究、审查和报告生成 |
+| V6 | 任务队列、观测、效果评估、安全和 MCP 接入 |
 
-当前向量化是本地字符特征哈希，不是语义 Embedding 模型；它保留 V1 的词面匹配特性，同时由 pgvector 保存并查询向量。要启用语义 Embedding，需要另行选定模型和数据处理服务。
+当前范围是 V4。V5 及之后的多 Agent 研究和生产化能力尚未实现。
 
-## 架构
+## V3 检索流程
 
-```text
-API Route
-   -> Service
-      -> VectorRetriever -> LocalHashVectorizer -> PostgreSQL / pgvector
-      -> LLM Client
-      -> PostgreSQL Repository
-```
+    文档分块
+      -> FastEmbed multilingual E5 small（本地 ONNX，384 维）
+      -> PostgreSQL / pgvector
 
-- `app/api/`：HTTP 接口和依赖注入。
-- `app/services/`：聊天、文档和会话用例。
-- `app/retrieval/`：文本切块、向量生成和检索。
-- `app/llm/`：DeepSeek 流式聊天客户端。
-- `app/repositories/postgres.py`：文档、分块、会话和消息的数据库读写。
-- `app/db/models.py`：SQLAlchemy 数据模型。
-- `migrations/`：Alembic 数据库迁移。
-- `app/repositories/json_io.py`、`documents.py`、`sessions.py`：V1 JSON 导入兼容工具。
+    用户问题
+      -> 语义向量候选 ─┐
+      -> jieba + BM25 ──┴-> RRF -> 可选 BGE Cross-Encoder -> Top K 引用
 
-## 安装和启动
+V3 选用 intfloat/multilingual-e5-small 生成 384 维向量，以保持现有 pgvector 列维度；查询和文档分别按 E5 约定添加 query:、passage: 前缀。BM25 使用 jieba 对中文分词，并保留英文和数字词项。RRF 合并两路排序。默认使用本地 BAAI/bge-reranker-base 对有限候选集重排；不希望下载重排模型时可设置 RETRIEVAL_RERANKER_ENABLED=false，此时以 RRF 排序返回。
 
-需要 Python 3.11+、Docker Compose 和一个可用的 DeepSeek API Key。
+模型缓存位于 DATA_DIR/model_cache。默认 DATA_DIR 是项目的 data 目录，因此权重会写入 E 盘项目目录，不使用 Docker 卷，也不会默认放在用户的 C 盘缓存。首次上传或查询需要从模型仓库下载权重；Embedding 模型和重排模型会分别在首次使用时加载。重排模型体积约 1 GB，请确保 E 盘有足够空间和可用网络。
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-```
+## V4 LangGraph 工作流
 
-首次配置时将 `.env.example` 复制为 `.env`，再填入 `DEEPSEEK_API_KEY`。已有 `.env` 时请保留它，并补充 `DATABASE_URL`。默认本地数据库地址为：
+    START -> retrieve -> agent --回答--> END
+                              |工具调用
+                              v
+                            tools -> agent（循环）
+                              |
+                              +--删除文档 -> interrupt（等待用户确认）
+                                                   |
+                                           Command(resume=...) -> 恢复
 
-```dotenv
-DATABASE_URL=postgresql+asyncpg://rag:rag_dev_password@localhost:5432/agent_rag
-```
+Agent 可调用知识库检索、文档列表和删除文档三个工具。工具参数由 Pydantic 模型生成 JSON Schema，并在执行前进行本地校验；删除文档会通过 `interrupt()` 暂停，用户确认后用相同的会话 ID 恢复。工具调用次数受配置限制。
 
-启动 pgvector 数据库并创建表：
+LangGraph Checkpoint 使用与业务数据相同的 PostgreSQL 数据库，但由 `AsyncPostgresSaver.setup()` 管理独立的 checkpoint 表。首次启动应用时会自动创建或升级这些表。普通会话消息仍写入业务 `sessions/messages` 表；Checkpoint 保存 Agent 工作流状态，供同一 `thread_id` 继续执行。
 
-```powershell
-docker compose up -d db
-python -m alembic upgrade head
-```
+学习文档逐文件解释 StateGraph、节点、条件分支、工具循环、checkpoint、`interrupt()` 和恢复 API：[docs/LANGGRAPH_LEARNING.md](docs/LANGGRAPH_LEARNING.md)。
 
-将现有 V1 JSON 文档和会话导入 PostgreSQL：
+## 安装与运行
 
-```powershell
-python -m app.migrations.import_v1_json
-```
+需要 Python 3.11+、Docker Compose、可用的 DeepSeek API Key。项目运行时只需要启动 PostgreSQL 容器，FastAPI 由 Python 运行。
 
-导入工具可重复运行；已存在的文档和会话会跳过。原始 JSON 文件保持不变，便于回退和核对。确认导入完成后启动应用：
+    python -m venv .venv
+    .venv\Scripts\Activate.ps1
+    python -m pip install -e ".[dev]"
+    Copy-Item .env.example .env
 
-```powershell
-python run.py
-```
+在 .env 中填写 `DEEPSEEK_API_KEY`，然后启动数据库并升级业务表结构：
 
-- 应用：`http://127.0.0.1:8000`
-- Swagger：`http://127.0.0.1:8000/docs`
-- 健康检查：`http://127.0.0.1:8000/api/health/ready`
+    docker compose up -d db
+    python -m alembic upgrade head
 
-## 检索和聊天
+LangGraph checkpoint 表会在应用第一次启动时由 saver 自动创建，无需额外 Alembic revision。
 
-上传时，服务将文本切块，在本地生成 384 维归一化字符 n-gram 向量，再以单个数据库事务保存文档和分块。提问时生成本地查询向量，由 pgvector 按 cosine distance 排序，并保留来源、分块和相关度信息。
+V2 已有知识库需要用新的语义模型重算已有向量。备份数据库后运行：
 
-聊天接口 `POST /api/chat/stream` 发送 `retrieval`、多个 `token`，最后发送 `completed` 事件；错误时发送 `error` 事件。
+    python -m app.retrieval.rebuild_embeddings
 
-```powershell
-curl.exe -N -X POST http://127.0.0.1:8000/api/chat/stream `
-  -H "Content-Type: application/json" `
-  -d '{"message":"知识库讲了什么？"}'
-```
+这个命令按批次重算现有分块，运行中断后可重复执行。完成后启动应用：
 
-## 检查
+    python run.py
 
-```powershell
-pytest
-ruff check .
-```
+- 应用：http://127.0.0.1:8000
+- Swagger：http://127.0.0.1:8000/docs
+- 数据库健康检查：http://127.0.0.1:8000/api/health/ready
 
-API 测试使用假的 LLM 客户端，不会调用模型服务。
+新上传的文档会自动使用当前配置的 Embedding 模型。数据库里若仍有旧模型生成的向量，检索会提示先执行重建命令，避免把不同模型空间的向量混在同一次搜索中。
 
-## V1 数据和当前边界
+## 检索评估
 
-- V1 的 `data/docstore.json` 和 `data/sessions/*.json` 不会被自动删除；先运行导入命令，再核对 PostgreSQL 中的记录。
-- 本地哈希向量适合原型和词面检索，对同义改写的召回能力有限。
-- 数据库向量列为 384 维；更换向量化算法前，需要迁移列定义并为已有分块重新生成向量。
-- PDF/Word 解析、混合检索、重排、LangGraph Agent 和生产部署属于后续版本。
+准备一个 JSON 文件，按数据库的 chunk_id（文档 ID:分块序号）标注相关分块：
+
+    [
+      {
+        "query": "PostgreSQL 如何存储向量？",
+        "relevant_chunk_ids": ["doc123:0", "doc123:2"]
+      }
+    ]
+
+运行 python -m app.retrieval.evaluate data/evaluation/retrieval_cases.json --k 5 会输出 Recall@K、MRR@K 和 Hit Rate@K。使用真实问题和人工标注的相关分块，比较调整前后的检索效果。
+
+## 开发检查
+
+    ruff format --check .
+    ruff check .
+    mypy app tests
+    pytest
+
+测试采用假的 Embedding、重排器和内存仓库，不需要启动 Docker，也不会请求 DeepSeek。
+
+## 目录说明
+
+- app/api/：HTTP 接口、依赖注入和健康检查。
+- app/agent/：LangGraph 状态、工作流图、工具参数 Schema 和工具执行。
+- app/services/：聊天、文档和会话用例。
+- app/retrieval/：切块、语义向量、BM25、RRF、重排和评估。
+- app/repositories/postgres.py：PostgreSQL 文档和会话读写。
+- app/db/models.py：SQLAlchemy 数据模型。
+- migrations/：Alembic 数据库迁移。
+- docs/V3_DESIGN.md：版本路线和 V3 技术选型、改动记录。
+- docs/LANGGRAPH_LEARNING.md：V4 LangGraph 系统学习指南和代码映射。
+
+## 当前边界
+
+- 当前 BM25 索引在每次查询时从 PostgreSQL 读取分块并在进程内评分，适合当前个人项目规模；更大语料应迁移到持久化倒排索引或数据库全文检索方案。
+- 重排是可配置步骤；Cross-Encoder 会增加本机模型缓存和 CPU 推理时间。
+- 修改 Embedding 模型后需重新生成所有分块的向量。当前数据库仍使用 384 维；换成不同维度模型时，需要新增数据库迁移并重建向量索引。
+- 当前上传仍只支持 UTF-8 .txt/.md；当前 Agent 工具只管理知识库检索、文档列表和删除。

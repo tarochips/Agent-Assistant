@@ -40,8 +40,7 @@ def upgrade() -> None:
         unique=True,
     )
     op.execute(
-        "CREATE INDEX ix_chunks_embedding_hnsw "
-        "ON chunks USING hnsw (embedding vector_cosine_ops)"
+        "CREATE INDEX ix_chunks_embedding_hnsw ON chunks USING hnsw (embedding vector_cosine_ops)"
     )
 
     op.create_table(

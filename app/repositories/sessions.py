@@ -19,7 +19,7 @@ class JsonSessionRepository:
 
     def create(self, title: str | None = None) -> dict[str, Any]:
         session_id = self._new_id()
-        session = {
+        session: dict[str, Any] = {
             "id": session_id,
             "title": title or f"会话{session_id}",
             "created_at": datetime.now().isoformat(),
@@ -45,7 +45,7 @@ class JsonSessionRepository:
     def list_sessions(self) -> list[dict[str, Any]]:
         sessions: list[dict[str, Any]] = []
         for path in self._sessions_dir.glob("*.json"):
-            session = self._store.load(path, {})
+            session: dict[str, Any] = self._store.load(path, {})
             if not session:
                 continue
             sessions.append(
@@ -93,9 +93,7 @@ class JsonSessionRepository:
             )
             title = session.get("title", "")
             if not title or title.startswith("会话"):
-                session["title"] = user_content[:30] + (
-                    "..." if len(user_content) > 30 else ""
-                )
+                session["title"] = user_content[:30] + ("..." if len(user_content) > 30 else "")
 
         self._store.mutate(path, {}, append)
 

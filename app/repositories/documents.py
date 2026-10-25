@@ -18,8 +18,7 @@ class JsonDocumentRepository:
     def list_documents(self) -> list[dict[str, Any]]:
         docstore = self._store.load(self._path, _EMPTY_DOCSTORE)
         documents = [
-            {"doc_id": doc_id, **info}
-            for doc_id, info in docstore.get("documents", {}).items()
+            {"doc_id": doc_id, **info} for doc_id, info in docstore.get("documents", {}).items()
         ]
         return sorted(documents, key=lambda item: item["uploaded_at"], reverse=True)
 

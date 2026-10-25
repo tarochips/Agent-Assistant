@@ -4,7 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.engine import make_url
 
+from app.api.dependencies import (
+    get_chat_service,
+    get_document_repository,
+    get_llm_client,
+    get_retriever,
+)
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.exceptions import AppError
@@ -12,8 +19,28 @@ from app.core.logging import configure_logging, request_logging_middleware
 
 
 @asynccontextmanager
-async def lifespan(_application: FastAPI):
-    yield
+async def lifespan(application: FastAPI):
+    if get_chat_service in application.dependency_overrides:
+        yield
+    else:
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        from app.agent.graph import build_agent_graph
+
+        settings = get_settings()
+        checkpoint_url = make_url(settings.database_url).set(drivername="postgresql")
+        async with AsyncPostgresSaver.from_conn_string(
+            checkpoint_url.render_as_string(hide_password=False)
+        ) as checkpointer:
+            await checkpointer.setup()
+            application.state.agent_graph = build_agent_graph(
+                retriever=get_retriever(),
+                document_repository=get_document_repository(),
+                llm_client=get_llm_client(),
+                settings=settings,
+                checkpointer=checkpointer,
+            )
+            yield
     database_module = sys.modules.get("app.core.database")
     if database_module is not None:
         await database_module.dispose_engine()
@@ -25,8 +52,8 @@ def create_app() -> FastAPI:
 
     application = FastAPI(
         title=settings.app_name,
-        version="2.0.0",
-        description="A PostgreSQL-backed RAG knowledge base with local vector retrieval.",
+        version="4.0.0",
+        description="A PostgreSQL-backed RAG knowledge base with a stateful LangGraph agent.",
         lifespan=lifespan,
     )
 

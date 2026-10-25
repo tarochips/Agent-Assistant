@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
+from app.schemas.events import ApprovalRequiredEvent
+
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
@@ -19,3 +21,11 @@ class ChatRequest(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+
+class ResumeChatRequest(BaseModel):
+    approved: bool
+
+
+class PendingApprovalResponse(BaseModel):
+    pending: ApprovalRequiredEvent | None

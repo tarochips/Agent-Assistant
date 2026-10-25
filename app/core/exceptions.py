@@ -16,3 +16,8 @@ class NotFoundError(AppError):
 class InvalidDocumentError(AppError):
     def __init__(self, message: str, *, code: str = "INVALID_DOCUMENT") -> None:
         super().__init__(message, code=code, status_code=400)
+
+
+class ConflictError(AppError):
+    def __init__(self, message: str, *, code: str = "CONFLICT") -> None:
+        super().__init__(message, code=code, status_code=409)
