@@ -1,3 +1,4 @@
+import hmac
 import sys
 from contextlib import asynccontextmanager
 
@@ -26,6 +27,7 @@ async def lifespan(application: FastAPI):
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
         from app.agent.graph import build_agent_graph
+        from app.agent.research import build_research_graph
 
         settings = get_settings()
         checkpoint_url = make_url(settings.database_url).set(drivername="postgresql")
@@ -40,6 +42,9 @@ async def lifespan(application: FastAPI):
                 settings=settings,
                 checkpointer=checkpointer,
             )
+            application.state.research_graph = build_research_graph(
+                retriever=get_retriever(), llm_client=get_llm_client(), settings=settings
+            )
             yield
     database_module = sys.modules.get("app.core.database")
     if database_module is not None:
@@ -52,12 +57,29 @@ def create_app() -> FastAPI:
 
     application = FastAPI(
         title=settings.app_name,
-        version="4.0.0",
-        description="A PostgreSQL-backed RAG knowledge base with a stateful LangGraph agent.",
+        version="6.0.0",
+        description="A RAG knowledge base with conversational and research agents.",
         lifespan=lifespan,
     )
 
     application.middleware("http")(request_logging_middleware)
+
+    @application.middleware("http")
+    async def authenticate_api(request: Request, call_next):
+        token = settings.api_access_token
+        if (
+            token
+            and request.url.path.startswith("/api/")
+            and request.url.path != "/api/health/live"
+        ):
+            authorization = request.headers.get("authorization", "")
+            expected = f"Bearer {token}"
+            if not hmac.compare_digest(authorization.encode("utf-8"), expected.encode("utf-8")):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": {"code": "UNAUTHORIZED", "message": "需要有效的访问令牌。"}},
+                )
+        return await call_next(request)
 
     @application.exception_handler(AppError)
     async def handle_app_error(_request: Request, exc: AppError) -> JSONResponse:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-ready-rag"
-version = "4.0.0"
+version = "6.0.0"
 description = "A PostgreSQL-backed RAG knowledge base with a stateful LangGraph agent."
 requires-python = ">=3.11"
 dependencies = [
@@ -24,6 +24,7 @@ dependencies = [
     "langgraph>=1.2,<2",
     "langgraph-checkpoint-postgres>=3.0,<4",
     "psycopg[binary]>=3.2",
+    "mcp>=1.28,<2",
 ]
 
 [project.optional-dependencies]

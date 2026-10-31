@@ -17,6 +17,7 @@ from app.schemas.events import (
     TokenEvent,
 )
 from app.services._async_utils import resolve
+from app.services.context_manager import ContextManager, ContextSummaryError, ConversationContext
 from app.streaming.sse import encode_sse
 
 logger = logging.getLogger("rag_app.chat")
@@ -28,10 +29,13 @@ class ChatService:
         session_repository: Any,
         graph: Any,
         settings: Settings,
+        research_graph: Any = None,
+        llm_client: Any = None,
     ) -> None:
         self._sessions = session_repository
         self._graph = graph
-        self._settings = settings
+        self._research_graph = research_graph
+        self._context = ContextManager(session_repository, llm_client, settings)
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[str]:
         try:
@@ -46,11 +50,26 @@ class ChatService:
                 )
                 return
 
-            history = self._history_messages(session.get("messages", []))
+            conversation = await self._context.prepare(session)
+            if request.mode == "research":
+                if self._research_graph is None:
+                    yield self._error("RESEARCH_UNAVAILABLE", "深度研究模式未配置。")
+                    return
+                async for event in self._run_research(request.message, session_id, conversation):
+                    yield event
+                return
+
             input_state = {
-                "messages": [*history, {"role": "user", "content": request.message}],
+                "messages": [*conversation.recent, {"role": "user", "content": request.message}],
                 "question": request.message,
+                "conversation_summary": conversation.summary,
             }
+        except ContextSummaryError:
+            logger.exception("context_summary_failed")
+            yield self._error(
+                "CONTEXT_SUMMARY_ERROR", "历史对话摘要更新失败，请稍后重试。原始会话未删除。"
+            )
+            return
         except Exception:
             logger.exception("chat_setup_failed")
             yield self._error("CHAT_SETUP_ERROR", "会话初始化失败，请检查会话和数据库状态。")
@@ -58,6 +77,40 @@ class ChatService:
 
         async for event in self._run_graph(input_state, session_id):
             yield event
+
+    async def _run_research(
+        self, question: str, session_id: str, conversation: ConversationContext
+    ) -> AsyncIterator[str]:
+        try:
+            result = await self._research_graph.ainvoke(
+                {
+                    "question": question,
+                    "conversation_context": {
+                        "summary": conversation.summary,
+                        "recent": conversation.recent,
+                    },
+                }
+            )
+            citations = [Citation.model_validate(item) for item in result.get("citations", [])]
+            yield encode_sse("retrieval", RetrievalEvent(session_id=session_id, sources=citations))
+            answer = result["report"]
+            await resolve(
+                self._sessions.append_exchange(
+                    session_id,
+                    question,
+                    answer,
+                    [citation.model_dump(mode="json") for citation in citations],
+                )
+            )
+            yield encode_sse("token", TokenEvent(delta=answer))
+            yield encode_sse(
+                "completed", CompletedEvent(session_id=session_id, citations=citations)
+            )
+        except StaleEmbeddingError:
+            yield self._error("STALE_EMBEDDINGS", "数据库中存在旧模型向量，请先重建向量。")
+        except Exception:
+            logger.exception("research_failed session_id=%s", session_id)
+            yield self._error("RESEARCH_ERROR", "深度研究失败，请检查模型和数据库配置后重试。")
 
     async def ensure_resumable(self, session_id: str) -> None:
         session = await resolve(self._sessions.get(session_id))
@@ -183,16 +236,6 @@ class ChatService:
             if session is not None:
                 return session
         return await resolve(self._sessions.create())
-
-    def _history_messages(self, history: list[dict[str, Any]]) -> list[dict[str, str]]:
-        filtered = [
-            {"role": message["role"], "content": message["content"]}
-            for message in history
-            if message.get("role") in {"user", "assistant"}
-            and isinstance(message.get("content"), str)
-        ]
-        max_history = self._settings.history_max_messages
-        return filtered[-max_history:] if max_history else []
 
     @staticmethod
     def _config(session_id: str) -> dict[str, Any]:

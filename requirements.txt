@@ -14,3 +14,4 @@ jieba>=0.42.1
 langgraph>=1.2,<2
 langgraph-checkpoint-postgres>=3.0,<4
 psycopg[binary]>=3.2
+mcp>=1.28,<2

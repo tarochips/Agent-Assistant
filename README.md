@@ -1,6 +1,6 @@
-# Agent-ready RAG V4
+# Agent-ready RAG V6（开发中）
 
-这是一个基于 FastAPI、PostgreSQL 和 pgvector 的中文/英文知识库问答项目。V3 提供混合检索与重排，V4 使用 LangGraph 编排有状态 Agent，支持受控工具调用、工具循环、PostgreSQL Checkpoint 和人工确认后恢复执行。
+这是一个基于 FastAPI、PostgreSQL 和 pgvector 的中文/英文知识库问答项目。支持混合检索、带人工确认的 Agent 工具调用，以及并行研究、证据审查和带来源的报告生成。
 
 ## 六阶段路线
 
@@ -9,11 +9,79 @@
 | V1 | 模块化 FastAPI、流式 SSE、基础 RAG |
 | V2 | PostgreSQL、pgvector、文档和会话持久化 |
 | V3 | 语义 Embedding、BM25、RRF、重排和检索评估 |
-| V4（当前） | LangGraph 单 Agent、受控工具调用、分支循环、Checkpoint 和中断恢复 |
+| V4 | LangGraph 单 Agent、受控工具调用、分支循环、Checkpoint 和中断恢复 |
 | V5 | 有证据引用的并行研究、审查和报告生成 |
-| V6 | 任务队列、观测、效果评估、安全和 MCP 接入 |
+| V6（开发中） | 持久化任务队列、基础观测、评估、安全和 MCP 接入 |
 
-当前范围是 V4。V5 及之后的多 Agent 研究和生产化能力尚未实现。
+V6 基础能力已经接入；仍需在真实 PostgreSQL、模型和多工作进程下完成端到端验证。
+
+## V6 后台研究任务
+
+升级数据库后，在两个终端分别启动 Web 服务和独立的任务工作进程：
+
+    python -m alembic upgrade head
+    python run.py
+    python -m app.jobs.worker
+
+通过 `POST /api/research-jobs` 提交 `{"question":"研究问题"}`，获取任务 ID；
+`GET /api/research-jobs/{id}` 查看状态和结果，`GET /api/research-jobs` 查看最近任务，
+`POST /api/research-jobs/{id}/cancel` 取消任务，`GET /api/research-jobs/metrics` 查看各状态数量。
+任务结果保存在任务表，不会自动写入聊天会话；现有页面的深度研究仍使用同步接口。
+
+任务由 PostgreSQL 行锁和租约分配，工作进程续租；执行失败或租约过期可重新领取，最多尝试
+`JOB_MAX_ATTEMPTS` 次。完成写入需要持有有效租约，避免旧工作进程覆盖结果。
+取消后工作进程在下次续租时停止，期间已经发出的模型调用可能仍会产生费用；重试也可能重复调用模型。
+`JOB_LEASE_SECONDS`、`JOB_POLL_SECONDS` 和 `JOB_MAX_ATTEMPTS` 可配置。
+
+## 访问控制和 MCP
+
+默认监听 `127.0.0.1`。可设置 `API_ACCESS_TOKEN`，所有 `/api/` 接口（存活检查除外）需要
+`Authorization: Bearer <令牌>`；页面可通过“设置访问令牌”在当前标签页使用令牌。
+未设置令牌时 API 不做身份验证，现有 `.env` 中的 `APP_HOST` 会覆盖默认监听地址。
+这个单令牌方案没有用户隔离、限流或 TLS，不能直接视作公网部署方案。
+
+运行 `python -m app.mcp_server.server` 启动本地 stdio MCP 服务，向 MCP 客户端提供
+`search_knowledge` 和 `list_documents` 两个只读工具。MCP 进程使用本机数据库配置和权限，
+应仅由可信的本地客户端启动；不提供远程 MCP 监听或删除工具。
+
+## 报告引用评估
+
+`python -m app.evaluation.reports <标注文件.json>` 计算引用编号有效率和人工标注证据命中率。
+文件格式示例：
+
+```json
+[{"report": "结论 [S1]", "citations": [{"chunk_id": "doc123:0"}], "relevant_chunk_ids": ["doc123:0"]}]
+```
+
+这些指标只检查引用结构和证据 ID，不评判结论事实正确性；需要用真实数据和人工标注评估报告质量。
+
+## 深度研究
+
+在页面勾选“深度研究”，或向 `POST /api/chat/stream` 发送 `mode: "research"`。
+规划员拆分问题，每个研究员运行独立的 LangGraph 子图，保存自己的消息、检索记录和证据，
+并可在限定轮次内自主调用只读知识库检索工具。研究员并行工作，报告撰写员依据去重后的资料生成草稿；
+审查员返回结构化结论，决定通过、要求修订或发起补充研究。修改或补充后会重新审查，达到上限仍未通过时报告会明确标记。
+无检索结果时返回资料不足提示。
+报告和来源保存至普通会话，页面会在整个研究完成后收到报告；普通聊天保持原有流式和确认机制。
+
+可通过 `RESEARCH_MAX_TASKS`（默认 3）、`RESEARCH_MAX_SUPPLEMENTAL`（默认 2）、
+`RESEARCH_WORKER_MAX_TOOL_ROUNDS`（每个研究员默认 2）、`RESEARCH_MAX_REVIEW_ROUNDS`（默认 2）和
+`RESEARCH_TIMEOUT_SECONDS`（单次模型调用或检索超时，默认 120 秒）约束执行。
+研究只使用本地知识库，不会联网搜索；引用编号会校验，但模型生成的结论与证据是否一致仍需人工核验。
+研究流程不使用聊天 Agent 的 checkpoint，中途失败需要重新提交。会话内的研究使用当前会话摘要和近期消息理解问题；独立后台任务没有关联会话，仅使用任务问题。
+规划、研究、审查和写作角色目前共享同一模型服务；子 Agent 状态在单次研究执行期间隔离，不持久化。
+
+## 对话上下文管理
+
+普通问答和会话内深度研究使用“较早对话摘要 + 近期原始对话 + 本次检索证据”。
+旧对话按批次调用模型增量合并到会话摘要，原始消息不会删除；摘要和已覆盖消息数存入数据库。
+近期消息受到 `HISTORY_MAX_MESSAGES`（默认 20 条）和 `CONTEXT_RECENT_MAX_CHARS`（默认 16000 字符）共同限制，尽量保留完整问答轮次。
+`CONTEXT_SUMMARY_BATCH_MESSAGES`、`CONTEXT_SUMMARY_BATCH_CHARS`、`CONTEXT_SUMMARY_MAX_CHARS` 和 `CONTEXT_SUMMARY_TIMEOUT_SECONDS` 可控制摘要批次、输出和超时。
+这些字符限制不是精确的模型 token 预算，也不限制检索材料或工具循环的总 token。
+
+摘要通过条件更新防止并发覆盖；模型失败、摘要过长、单条历史超过批次限制或摘要并发冲突时会返回错误，重试后可继续，原始历史仍保留。
+摘要可能遗漏或误述内容，它只是理解对话的辅助背景，不能替代知识库证据或授权工具操作；增量摘要需要额外调用模型并发送待压缩的历史对话。
+普通问答仍使用当前问题直接检索，没有自动改写上下文相关的追问。数据库升级需要执行 `python -m alembic upgrade head`。
 
 ## V3 检索流程
 
@@ -97,6 +165,9 @@ V2 已有知识库需要用新的语义模型重算已有向量。备份数据�
     pytest
 
 测试采用假的 Embedding、重排器和内存仓库，不需要启动 Docker，也不会请求 DeepSeek。
+要执行 PostgreSQL 任务租约集成测试，可将 `TEST_DATABASE_URL` 指向专用测试数据库
+（使用 `postgresql+asyncpg://` 格式）后运行 `pytest tests/integration/test_postgres_jobs.py`。
+测试会创建并删除一个随机命名的临时 schema；未配置时自动跳过。
 
 ## 目录说明
 

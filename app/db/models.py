@@ -46,6 +46,12 @@ class SessionRecord(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    context_summary: Mapped[str] = mapped_column(
+        Text, default="", server_default="", nullable=False
+    )
+    summary_message_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
     )
@@ -67,3 +73,21 @@ class MessageRecord(Base):
 
 
 Index("ix_messages_session_id_id", MessageRecord.session_id, MessageRecord.id)
+
+
+class ResearchJobRecord(Base):
+    __tablename__ = "research_jobs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lease_token: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+Index("ix_research_jobs_status_created", ResearchJobRecord.status, ResearchJobRecord.created_at)

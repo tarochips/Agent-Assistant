@@ -232,6 +232,8 @@ class PostgresSessionRepository:
                 "id": record.id,
                 "title": record.title,
                 "created_at": record.created_at.isoformat(),
+                "context_summary": record.context_summary,
+                "summary_message_count": record.summary_message_count,
                 "messages": [
                     {
                         "role": message.role,
@@ -241,6 +243,23 @@ class PostgresSessionRepository:
                     for message in messages
                 ],
             }
+
+    async def update_summary(
+        self, session_id: str, *, expected_count: int, new_count: int, summary: str
+    ) -> bool:
+        if not _SAFE_ID.fullmatch(session_id) or new_count <= expected_count:
+            return False
+        async with self._session_factory() as session, session.begin():
+            statement = (
+                update(SessionRecord)
+                .where(
+                    SessionRecord.id == session_id,
+                    SessionRecord.summary_message_count == expected_count,
+                )
+                .values(context_summary=summary, summary_message_count=new_count)
+                .returning(SessionRecord.id)
+            )
+            return (await session.execute(statement)).scalar_one_or_none() is not None
 
     async def list_sessions(self) -> list[dict[str, Any]]:
         count = func.count(MessageRecord.id).label("message_count")

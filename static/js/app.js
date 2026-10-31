@@ -13,6 +13,18 @@
     const userInput = $("#user-input");
     const btnSend = $("#btn-send");
     const btnNew = $("#btn-new-session");
+    $("#btn-token").addEventListener("click", () => {
+        const token = window.prompt("请输入访问令牌（仅保存在当前浏览器标签页）", "");
+        if (token === null) return;
+        if (token.trim()) sessionStorage.setItem("rag-api-token", token.trim());
+        else sessionStorage.removeItem("rag-api-token");
+        window.location.reload();
+    });
+
+    function authHeaders() {
+        const token = sessionStorage.getItem("rag-api-token");
+        return token ? { Authorization: `Bearer ${token}` } : {};
+    }
     const sessionTitle = $("#current-session-title");
     const docList = $("#doc_list");
     const fileInput = $("#file-input");
@@ -27,7 +39,7 @@
     }
 
     async function api(method, path, body) {
-        const options = { method, headers: {} };
+        const options = { method, headers: authHeaders() };
         if (body !== undefined) {
             options.headers["Content-Type"] = "application/json";
             options.body = JSON.stringify(body);
@@ -129,6 +141,7 @@
         try {
             const response = await fetch(`${API}/documents/upload`, {
                 method: "POST",
+                headers: authHeaders(),
                 body: form,
             });
             const payload = await response.json().catch(() => null);
@@ -260,7 +273,7 @@
                         `${API}/chat/${encodeURIComponent(payload.session_id)}/resume`,
                         {
                             method: "POST",
-                            headers: { "Content-Type": "application/json" },
+                            headers: { ...authHeaders(), "Content-Type": "application/json" },
                             body: JSON.stringify({ approved }),
                         },
                     );
@@ -289,7 +302,7 @@
                 `${API}/chat/${encodeURIComponent(sessionId)}/resume`,
                 {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { ...authHeaders(), "Content-Type": "application/json" },
                     body: JSON.stringify({ approved }),
                 },
             );
@@ -331,10 +344,11 @@
         try {
             const response = await fetch(`${API}/chat/stream`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { ...authHeaders(), "Content-Type": "application/json" },
                 body: JSON.stringify({
                     message: query,
                     session_id: state.activeSessionId,
+                    mode: $("#research-mode").checked ? "research" : "chat",
                 }),
                 signal: controller.signal,
             });

@@ -6,6 +6,7 @@ class AgentState(TypedDict, total=False):
 
     messages: list[dict[str, Any]]
     question: str
+    conversation_summary: str
     context: list[dict[str, Any]]
     citations: list[dict[str, Any]]
     tool_rounds: int

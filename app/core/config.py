@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Agent-ready RAG"
-    app_host: str = "0.0.0.0"
+    app_host: str = "127.0.0.1"
     app_port: int = 8000
     app_debug: bool = False
 
@@ -42,7 +42,21 @@ class Settings(BaseSettings):
     embedding_model: str = "intfloat/multilingual-e5-small"
     embedding_threads: int = Field(default=2, gt=0, le=32)
     history_max_messages: int = Field(default=20, ge=0, le=100)
+    context_recent_max_chars: int = Field(default=16000, ge=1000, le=200000)
+    context_summary_batch_messages: int = Field(default=10, ge=1, le=50)
+    context_summary_batch_chars: int = Field(default=24000, ge=4000, le=200000)
+    context_summary_max_chars: int = Field(default=4000, ge=500, le=16000)
+    context_summary_timeout_seconds: int = Field(default=60, ge=1, le=600)
     agent_max_tool_rounds: int = Field(default=5, ge=1, le=12)
+    research_max_tasks: int = Field(default=3, ge=1, le=5)
+    research_max_supplemental: int = Field(default=2, ge=0, le=3)
+    research_worker_max_tool_rounds: int = Field(default=2, ge=1, le=5)
+    research_max_review_rounds: int = Field(default=2, ge=1, le=5)
+    research_timeout_seconds: int = Field(default=120, ge=1, le=600)
+    job_lease_seconds: int = Field(default=60, ge=9, le=3600)
+    job_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    job_max_attempts: int = Field(default=3, ge=1, le=10)
+    api_access_token: str = ""
     max_upload_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
 
     data_dir: Path = PROJECT_ROOT / "data"

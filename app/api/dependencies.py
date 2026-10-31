@@ -71,6 +71,8 @@ def get_chat_service(request: Request) -> ChatService:
         get_session_repository(),
         request.app.state.agent_graph,
         get_settings(),
+        request.app.state.research_graph,
+        get_llm_client(),
     )
 
 

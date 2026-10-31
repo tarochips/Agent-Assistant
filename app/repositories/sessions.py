@@ -97,6 +97,29 @@ class JsonSessionRepository:
 
         self._store.mutate(path, {}, append)
 
+    def update_summary(
+        self, session_id: str, *, expected_count: int, new_count: int, summary: str
+    ) -> bool:
+        if not _SAFE_ID.fullmatch(session_id) or new_count <= expected_count:
+            return False
+        path = self._path(session_id)
+        if not path.exists():
+            return False
+
+        def update(session: dict[str, Any]) -> bool:
+            if not session:
+                raise ValueError("session not found")
+            if session.get("summary_message_count", 0) != expected_count:
+                return False
+            session["context_summary"] = summary
+            session["summary_message_count"] = new_count
+            return True
+
+        try:
+            return bool(self._store.mutate(path, {}, update))
+        except ValueError:
+            return False
+
     def _new_id(self) -> str:
         while True:
             candidate = uuid.uuid4().hex[:8]

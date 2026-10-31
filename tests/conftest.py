@@ -26,8 +26,15 @@ from app.services.session_service import SessionService
 class FakeLLMClient:
     def __init__(self) -> None:
         self.replies: list[tuple[str, list[LLMToolCall]]] = []
+        self.summary_prompts: list[list[dict]] = []
+        self.chat_prompts: list[list[dict]] = []
+
+    async def stream(self, messages) -> AsyncIterator[str]:
+        self.summary_prompts.append(messages)
+        yield "历史对话摘要"
 
     async def stream_with_tools(self, _messages, _tools) -> AsyncIterator[LLMStreamChunk]:
+        self.chat_prompts.append(_messages)
         if self.replies:
             text, tool_calls = self.replies.pop(0)
             if text:
@@ -80,6 +87,7 @@ def service_bundle(tmp_path: Path):
             session_repository,
             graph,
             settings,
+            llm_client=fake_llm,
         ),
     }
 
